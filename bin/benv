@@ -31,12 +31,22 @@ function expandHome(p) {
   return p;
 }
 
-function sh(cmd, opts = {}) {
-  return cp.execSync(cmd, { stdio: 'pipe', encoding: 'utf8', ...opts });
+// Runs a program with an explicit argv array and NO shell, so arguments (branch names,
+// paths, service names, etc.) are passed verbatim and can never be interpreted as shell
+// syntax. This is the only way benv invokes git/cp/rsync/docker/editors.
+function runFile(file, argv, opts = {}) {
+  cp.execFileSync(file, argv, { stdio: 'inherit', ...opts });
 }
 
-function run(cmd, opts = {}) {
-  // Streams output to the user (for docker compose etc).
+// Same, but captures stdout.
+function capture(file, argv, opts = {}) {
+  return cp.execFileSync(file, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+}
+
+// Runs a manifest-authored command string in a shell. These strings come from the project's
+// own .benv.json (`up`/`down`/`postUp`) — trusted config, like npm scripts — and are meant to
+// be shell snippets. Never used with values derived from CLI arguments.
+function shell(cmd, opts = {}) {
   cp.execSync(cmd, { stdio: 'inherit', ...opts });
 }
 
@@ -44,9 +54,13 @@ function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-function gitOk(repoDir, cmd) {
+function git(repoDir, argv, opts = {}) {
+  return capture('git', ['-C', repoDir, ...argv], opts);
+}
+
+function gitOk(repoDir, argv) {
   try {
-    sh(`git -C ${JSON.stringify(repoDir)} ${cmd}`);
+    cp.execFileSync('git', ['-C', repoDir, ...argv], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -56,13 +70,13 @@ function gitOk(repoDir, cmd) {
 // Resolves the repo's default branch (main/master), used as the base for brand-new branches.
 function defaultBranch(repoDir) {
   try {
-    const ref = sh(`git -C ${JSON.stringify(repoDir)} symbolic-ref --short refs/remotes/origin/HEAD`).trim();
+    const ref = git(repoDir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).trim();
     if (ref) return ref.replace(/^origin\//, '');
   } catch {
     /* origin/HEAD not set; fall through */
   }
   for (const b of ['main', 'master']) {
-    if (gitOk(repoDir, `rev-parse --verify --quiet ${JSON.stringify(`refs/remotes/origin/${b}`)}`)) return b;
+    if (gitOk(repoDir, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${b}`])) return b;
   }
   return 'master';
 }
@@ -144,12 +158,11 @@ function nextSlot(state) {
 }
 
 function portFree(port) {
-  // Synchronous-ish check: try to bind with a throwaway node process.
+  // Try to bind the port in a throwaway process (no shell; port passed as an argv value).
+  const script = 'const n=require("net"),p=+process.argv[1];const s=n.createServer();'
+    + 's.once("error",()=>process.exit(1));s.listen(p,()=>s.close(()=>process.exit(0)));';
   try {
-    cp.execSync(
-      `node -e 'const n=require("net");const s=n.createServer();s.once("error",()=>process.exit(1));s.listen(${port},()=>{s.close(()=>process.exit(0))})'`,
-      { stdio: 'ignore', timeout: 3000 },
-    );
+    cp.execFileSync(process.execPath, ['-e', script, String(port)], { stdio: 'ignore', timeout: 3000 });
     return true;
   } catch {
     return false;
@@ -365,19 +378,16 @@ function cloneWorkspace(m, instanceDir) {
   if (fs.existsSync(instanceDir)) die(`instance dir already exists: ${instanceDir}`);
   // Copy-on-write clone on APFS; falls back to a normal recursive copy elsewhere.
   const src = m.workspaceRoot.replace(/\/$/, '');
-  const excludeArgs = m.excludes
-    .map((e) => `--exclude=${JSON.stringify(e)}`)
-    .join(' ');
   const useClone = process.platform === 'darwin';
   console.log(`Cloning workspace → ${instanceDir} ${useClone ? '(CoW)' : ''}`);
   if (useClone && m.excludes.length === 0) {
     // Fast path: whole-tree clonefile.
-    run(`cp -c -R ${JSON.stringify(src)} ${JSON.stringify(instanceDir)}`);
+    runFile('cp', ['-c', '-R', src, instanceDir]);
   } else {
-    // rsync respects excludes and still uses clonefile via --link-dest? No —
-    // use ditto/rsync. rsync is the portable option with excludes.
+    // rsync is the portable option and honours excludes.
     fs.mkdirSync(instanceDir, { recursive: true });
-    run(`rsync -a ${excludeArgs} ${JSON.stringify(src + '/')} ${JSON.stringify(instanceDir + '/')}`);
+    const rsyncArgs = ['-a', ...m.excludes.map((e) => `--exclude=${e}`), `${src}/`, `${instanceDir}/`];
+    runFile('rsync', rsyncArgs);
   }
 }
 
@@ -429,23 +439,21 @@ function cmdUp(args) {
 
   // Switch branch in the cloned repo. `-f` everywhere: the clone is a throwaway copy, so
   // discard any uncommitted changes carried over from the source working tree.
-  const b = JSON.stringify(branch);
-  const rd = JSON.stringify(repoDir);
   try {
-    if (gitOk(repoDir, `rev-parse --verify --quiet ${JSON.stringify(`refs/heads/${branch}`)}`)) {
+    if (gitOk(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])) {
       console.log(`Checking out existing local branch ${branch}`);
-      sh(`git -C ${rd} checkout -f ${b}`);
-    } else if (gitOk(repoDir, `fetch origin ${b}`)) {
+      runFile('git', ['-C', repoDir, 'checkout', '-f', branch]);
+    } else if (gitOk(repoDir, ['fetch', 'origin', branch])) {
       console.log(`Checking out ${branch} from origin`);
-      sh(`git -C ${rd} checkout -f -B ${b} FETCH_HEAD`);
+      runFile('git', ['-C', repoDir, 'checkout', '-f', '-B', branch, 'FETCH_HEAD']);
     } else {
       // Branch does not exist locally or on origin: create it from the latest default branch.
       const base = defaultBranch(repoDir);
       console.log(`Branch ${branch} not found; creating it from latest origin/${base}`);
-      if (!gitOk(repoDir, `fetch origin ${JSON.stringify(base)}`)) {
+      if (!gitOk(repoDir, ['fetch', 'origin', base])) {
         throw new Error(`could not fetch base branch origin/${base}`);
       }
-      sh(`git -C ${rd} checkout -f -B ${b} FETCH_HEAD`);
+      runFile('git', ['-C', repoDir, 'checkout', '-f', '-B', branch, 'FETCH_HEAD']);
     }
   } catch (e) {
     fs.rmSync(instanceDir, { recursive: true, force: true });
@@ -474,20 +482,14 @@ function cmdUp(args) {
       // Only the app services; --no-deps so depends_on never resurrects data services.
       // Networks are external → joins the main stack; nothing of main is created/removed.
       console.log(`Starting app on shared DB (project=${project}, offset=+${offset})`);
-      run(
-        `docker compose -p ${JSON.stringify(project)} -f ${JSON.stringify(composeOut)} up -d --no-deps ${appServices.map((s) => JSON.stringify(s)).join(' ')}`,
-        { cwd: instanceDir },
-      );
+      runFile('docker', ['compose', '-p', project, '-f', composeOut, 'up', '-d', '--no-deps', ...appServices], { cwd: instanceDir });
     } else {
       console.log(`Starting full stack, isolated DB (project=${project}, offset=+${offset})`);
-      run(
-        `docker compose -p ${JSON.stringify(project)} -f ${JSON.stringify(composeOut)} up -d`,
-        { cwd: instanceDir },
-      );
+      runFile('docker', ['compose', '-p', project, '-f', composeOut, 'up', '-d'], { cwd: instanceDir });
     }
   } else if (m.up) {
     console.log(`Running up command (offset=+${offset})`);
-    run(m.up, {
+    shell(m.up, {
       cwd: repoDir,
       env: { ...process.env, BENV_DIR: instanceDir, BENV_REPO: repoDir, BENV_NAME: name, BENV_PORT_OFFSET: String(offset), BENV_PROJECT: project },
     });
@@ -506,7 +508,7 @@ function cmdUp(args) {
     for (const c of m.postUp) {
       console.log(`postUp: ${c}`);
       try {
-        run(c, { cwd: instanceDir, env: hookEnv });
+        shell(c, { cwd: instanceDir, env: hookEnv });
       } catch (e) {
         console.error(`  warn: postUp command failed: ${e.message}`);
       }
@@ -558,13 +560,14 @@ function cmdPorts(args) {
 function stopInstance(m, r) {
   if (r.composeFile && fs.existsSync(r.composeFile)) {
     try {
-      run(`docker compose -p ${JSON.stringify(r.project)} -f ${JSON.stringify(r.composeFile)} down`, { cwd: r.dir });
+      // No `-v`: never removes volumes. External networks (shared mode) are left intact.
+      runFile('docker', ['compose', '-p', r.project, '-f', r.composeFile, 'down'], { cwd: r.dir });
     } catch (e) {
       console.error(`  warn: compose down failed: ${e.message}`);
     }
   } else if (m.down) {
     try {
-      run(m.down, {
+      shell(m.down, {
         cwd: r.repoDir,
         env: { ...process.env, BENV_DIR: r.dir, BENV_REPO: r.repoDir, BENV_NAME: r.name, BENV_PORT_OFFSET: String(r.offset), BENV_PROJECT: r.project },
       });
@@ -628,16 +631,17 @@ function cmdOpen(args) {
     die('no editor given. Use --zed/--code/--cursor, --editor <cmd>, set "editor" in .benv.json, or $EDITOR.');
   }
 
-  const bin = cmd.split(/\s+/)[0];
+  const parts = cmd.split(/\s+/);
+  const bin = parts[0];
   try {
-    sh(`command -v ${bin}`);
+    cp.execFileSync('which', [bin], { stdio: 'ignore' });
   } catch {
     die(`editor command not found on PATH: ${bin}`);
   }
 
   console.log(`Opening ${dir} in ${cmd}`);
-  const parts = cmd.split(/\s+/);
-  const child = cp.spawn(parts[0], [...parts.slice(1), dir], { detached: true, stdio: 'ignore' });
+  const child = cp.spawn(bin, [...parts.slice(1), dir], { detached: true, stdio: 'ignore' });
+  child.on('error', (e) => console.error(`benv: failed to launch editor: ${e.message}`));
   child.unref();
 }
 
@@ -707,6 +711,15 @@ function parseArgs(argv) {
   return out;
 }
 
+function version() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    return pkg.version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 function main() {
   const [, , command, ...rest] = process.argv;
   const args = parseArgs(rest);
@@ -719,6 +732,7 @@ function main() {
     case 'down': case 'stop': return cmdDown(args);
     case 'rm': case 'destroy': return cmdRm(args);
     case 'prune': return cmdPrune();
+    case '-v': case '--version': case 'version': return console.log(`benv ${version()}`);
     case undefined: case '-h': case '--help': case 'help': return usage();
     default:
       die(`unknown command "${command}" (see \`benv help\`).`);
@@ -726,7 +740,12 @@ function main() {
 }
 
 if (require.main === module) {
-  main();
+  try {
+    main();
+  } catch (e) {
+    // Surface a clean one-line error instead of a raw stack trace.
+    die(e && e.message ? e.message : String(e));
+  }
 } else {
   module.exports = { rewriteCompose, sharedCompose, slug, nextSlot };
 }
