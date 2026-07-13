@@ -638,16 +638,10 @@ function cmdOpen(args) {
 
   const parts = cmd.split(/\s+/);
   const bin = parts[0];
-  try {
-    cp.execFileSync('which', [bin], { stdio: 'ignore' });
-  } catch {
-    die(`editor command not found on PATH: ${bin}`);
-  }
 
+  // Run `<program> <dir>` in the foreground, inheriting the current terminal.
   console.log(`Opening ${dir} in ${cmd}`);
-  const child = cp.spawn(bin, [...parts.slice(1), dir], { detached: true, stdio: 'ignore' });
-  child.on('error', (e) => console.error(`benv: failed to launch editor: ${e.message}`));
-  child.unref();
+  cp.spawnSync(bin, [...parts.slice(1), dir], { stdio: 'inherit' });
 }
 
 function cmdPrune() {
