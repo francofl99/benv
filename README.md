@@ -60,7 +60,7 @@ benv rm my-branch
 | `benv up <branch> [--name N]` | Clone workspace, checkout branch, start on a free port offset. **Default: shares the main stack's DB** |
 | `benv up <branch> --isolated-db` | Full stack with its own fresh DB volumes instead |
 | `benv ls` | List instances |
-| `benv open [name] [--zed\|--code\|--cursor\|--editor <cmd>] [--root]` | Open an instance in an editor (repo dir; `--root` = whole workspace) |
+| `benv open [name] [--<editor> \| --editor <cmd>] [--root]` | Open an instance's repo dir in an editor: `--<editor>` runs `<editor> <dir>` in the foreground (e.g. `--code`, `--zed`, `--claude`); `--root` opens the whole workspace |
 | `benv ports <name>` | Show port mappings |
 | `benv down <name>` | Stop an instance's stack (keeps the dir) |
 | `benv rm <name>` | Stop + delete an instance |
