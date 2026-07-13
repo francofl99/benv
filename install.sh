@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Installs benv by symlinking the CLI into ~/.local/bin (and the skill into
-# ~/.claude/skills if that directory exists). Re-run after pulling updates —
-# symlinks always point at this repo, so there is nothing to rebuild.
+# Installs benv by symlinking the CLI into ~/.local/bin, plus the Claude skill and
+# slash command into ~/.claude (if that directory exists). Re-run after pulling
+# updates — symlinks always point at this repo, so there is nothing to rebuild.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,11 +12,18 @@ ln -sf "$REPO_DIR/bin/benv" "$BIN_DIR/benv"
 chmod +x "$REPO_DIR/bin/benv"
 echo "✔ linked $BIN_DIR/benv -> $REPO_DIR/bin/benv"
 
-# Optional: install the Claude skill so agents know how to drive benv.
-SKILLS_DIR="$HOME/.claude/skills"
-if [ -d "$SKILLS_DIR" ]; then
-  ln -sfn "$REPO_DIR/skills/parallel-env" "$SKILLS_DIR/parallel-env"
-  echo "✔ linked $SKILLS_DIR/parallel-env -> $REPO_DIR/skills/parallel-env"
+# Claude integration: skill (natural-language trigger) + /benv slash command.
+CLAUDE_DIR="$HOME/.claude"
+if [ -d "$CLAUDE_DIR" ]; then
+  # Remove the pre-rename skill link if it still points here (migration cleanup).
+  if [ -L "$CLAUDE_DIR/skills/parallel-env" ]; then
+    rm -f "$CLAUDE_DIR/skills/parallel-env"
+  fi
+  mkdir -p "$CLAUDE_DIR/skills" "$CLAUDE_DIR/commands"
+  ln -sfn "$REPO_DIR/skills/benv" "$CLAUDE_DIR/skills/benv"
+  echo "✔ linked $CLAUDE_DIR/skills/benv"
+  ln -sf "$REPO_DIR/commands/benv.md" "$CLAUDE_DIR/commands/benv.md"
+  echo "✔ linked $CLAUDE_DIR/commands/benv.md  (use /benv)"
 fi
 
 case ":$PATH:" in

@@ -1,5 +1,5 @@
 ---
-name: parallel-env
+name: benv
 description: >
   Levanta entornos paralelos por branch usando el CLI `benv` en lugar de git worktrees.
   Clona el workspace (copy-on-write en APFS), hace checkout de la branch, y arranca su
@@ -9,7 +9,7 @@ description: >
   toggle de worktrees.
 ---
 
-# parallel-env (`benv`)
+# benv
 
 `benv` es un CLI portable (`~/.local/bin/benv`, Node sin deps) que reemplaza el flujo de
 git worktrees por **instancias aisladas**: cada branch corre en su propia copia del

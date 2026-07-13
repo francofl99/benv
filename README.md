@@ -27,15 +27,16 @@ cd ~/Projects/benv
 ```
 
 `install.sh` symlinks `bin/benv` into `~/.local/bin` (make sure that's on your `PATH`) and,
-if present, the Claude skill into `~/.claude/skills`. Re-running after `git pull` needs no
-rebuild — the symlink always points at the repo.
+if `~/.claude` exists, the Claude **skill** (`benv`, natural-language trigger) and **`/benv`
+slash command** into `~/.claude`. Re-running after `git pull` needs no rebuild — the symlinks
+always point at the repo.
 
 Check it: `benv --version`.
 
 ### Uninstall
 
 ```bash
-rm -f ~/.local/bin/benv ~/.claude/skills/parallel-env   # remove the symlinks
+rm -f ~/.local/bin/benv ~/.claude/skills/benv ~/.claude/commands/benv.md   # remove the symlinks
 rm -rf ~/.benv                                           # (optional) instance state + clones
 ```
 
