@@ -121,7 +121,9 @@ it in a wait/retry.
 ## How it works
 
 1. **Clone** `workspaceRoot` to the instance dir (`cp -c -R` CoW on APFS; `rsync` elsewhere).
-2. **Checkout** the branch in `repoSubdir` (`-f`, since the clone is throwaway).
+2. **Checkout** the branch in `repoSubdir` (`-f`, since the clone is throwaway):
+   existing local branch → checkout; else on origin → fetch + checkout; else **create a new
+   branch from the latest default branch** (`origin/main` or `origin/master`, fetched fresh).
 3. **Isolate the stack**: rewrite host ports (+offset); in isolated mode prefix network/volume
    names; in shared mode mark networks external and start only `appServices` with `--no-deps`.
 4. **Track state** in `~/.benv/<name>/state.json`; pick the lowest port offset whose ports are

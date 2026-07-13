@@ -44,6 +44,29 @@ function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+function gitOk(repoDir, cmd) {
+  try {
+    sh(`git -C ${JSON.stringify(repoDir)} ${cmd}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Resolves the repo's default branch (main/master), used as the base for brand-new branches.
+function defaultBranch(repoDir) {
+  try {
+    const ref = sh(`git -C ${JSON.stringify(repoDir)} symbolic-ref --short refs/remotes/origin/HEAD`).trim();
+    if (ref) return ref.replace(/^origin\//, '');
+  } catch {
+    /* origin/HEAD not set; fall through */
+  }
+  for (const b of ['main', 'master']) {
+    if (gitOk(repoDir, `rev-parse --verify --quiet ${JSON.stringify(`refs/remotes/origin/${b}`)}`)) return b;
+  }
+  return 'master';
+}
+
 // ---------------------------------------------------------------------------
 // Manifest discovery + defaults
 // ---------------------------------------------------------------------------
@@ -404,20 +427,29 @@ function cmdUp(args) {
 
   cloneWorkspace(m, instanceDir);
 
-  // Switch branch in the cloned repo.
-  console.log(`Checking out ${branch} in ${repoDir}`);
+  // Switch branch in the cloned repo. `-f` everywhere: the clone is a throwaway copy, so
+  // discard any uncommitted changes carried over from the source working tree.
+  const b = JSON.stringify(branch);
+  const rd = JSON.stringify(repoDir);
   try {
-    // -f: the clone is a throwaway copy; discard any uncommitted changes carried over
-    // from the source working tree so the instance starts on a clean target branch.
-    sh(`git -C ${JSON.stringify(repoDir)} checkout -f ${JSON.stringify(branch)}`);
-  } catch {
-    try {
-      sh(`git -C ${JSON.stringify(repoDir)} fetch origin ${JSON.stringify(branch)}`);
-      sh(`git -C ${JSON.stringify(repoDir)} checkout -f -B ${JSON.stringify(branch)} FETCH_HEAD`);
-    } catch (e) {
-      fs.rmSync(instanceDir, { recursive: true, force: true });
-      die(`could not checkout branch "${branch}": ${e.message}`);
+    if (gitOk(repoDir, `rev-parse --verify --quiet ${JSON.stringify(`refs/heads/${branch}`)}`)) {
+      console.log(`Checking out existing local branch ${branch}`);
+      sh(`git -C ${rd} checkout -f ${b}`);
+    } else if (gitOk(repoDir, `fetch origin ${b}`)) {
+      console.log(`Checking out ${branch} from origin`);
+      sh(`git -C ${rd} checkout -f -B ${b} FETCH_HEAD`);
+    } else {
+      // Branch does not exist locally or on origin: create it from the latest default branch.
+      const base = defaultBranch(repoDir);
+      console.log(`Branch ${branch} not found; creating it from latest origin/${base}`);
+      if (!gitOk(repoDir, `fetch origin ${JSON.stringify(base)}`)) {
+        throw new Error(`could not fetch base branch origin/${base}`);
+      }
+      sh(`git -C ${rd} checkout -f -B ${b} FETCH_HEAD`);
     }
+  } catch (e) {
+    fs.rmSync(instanceDir, { recursive: true, force: true });
+    die(`could not prepare branch "${branch}": ${e.message}`);
   }
 
   const record = { name, branch, slot, offset, dir: instanceDir, repoDir, project, mode: m.compose ? mode : 'command', created: new Date().toISOString() };
