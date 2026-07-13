@@ -19,8 +19,8 @@ workspace, en su propio stack, en un offset de puertos.
 
 - El usuario quiere correr una branch en paralelo al entorno principal.
 - Quiere "el mismo entorno pero en otro puerto" para otra branch.
-- Está frustrado con worktrees porque Docker monta el checkout principal (ver skill
-  `toggle-worktree`): `benv` evita ese problema dándole a cada branch su propio dir + stack.
+- Está frustrado con worktrees porque su tooling/Docker monta el checkout principal:
+  `benv` evita ese problema dándole a cada branch su propio dir + stack.
 
 ## Requisitos
 

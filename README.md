@@ -11,10 +11,17 @@ near-zero disk until files change.
 - **Project-agnostic**: everything project-specific lives in a `.benv.json` manifest.
 - Works with Docker Compose out of the box, or any stack via `up`/`down` commands.
 
+## Requirements
+
+- **Node 16+**
+- **git**
+- **Docker Compose** (for `compose`-based projects)
+- macOS/APFS for copy-on-write clones; on other platforms benv falls back to `rsync`.
+
 ## Install
 
 ```bash
-git clone <this-repo> ~/Projects/benv
+git clone git@github.com:francofl99/benv.git ~/Projects/benv
 cd ~/Projects/benv
 ./install.sh
 ```
@@ -23,7 +30,14 @@ cd ~/Projects/benv
 if present, the Claude skill into `~/.claude/skills`. Re-running after `git pull` needs no
 rebuild — the symlink always points at the repo.
 
-> Requires Node 16+, and Docker Compose for compose-based projects.
+Check it: `benv --version`.
+
+### Uninstall
+
+```bash
+rm -f ~/.local/bin/benv ~/.claude/skills/parallel-env   # remove the symlinks
+rm -rf ~/.benv                                           # (optional) instance state + clones
+```
 
 ## Quick start
 
@@ -136,6 +150,18 @@ it in a wait/retry.
 - Clone `workspaceRoot` with everything the stack mounts (sibling repos included), or relative
   mounts will point outside the copy.
 
+## Security
+
+External programs (git, docker, cp, rsync, editors) are invoked **without a shell**, so branch
+names, paths, and other inputs can never be interpreted as shell syntax. The `up`/`down`/
+`postUp` strings in a `.benv.json` **are** run in a shell — they are trusted project config, so
+only run benv in a repo whose `.benv.json` you trust. See [SECURITY.md](SECURITY.md).
+
+## Contributing
+
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Keep it dependency-free and
+shell-injection-free. Run `npm test` before pushing.
+
 ## License
 
-MIT
+[MIT](LICENSE)

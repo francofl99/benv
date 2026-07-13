@@ -6,13 +6,31 @@
     "benv": "bin/benv"
   },
   "scripts": {
-    "postinstall": "true"
+    "test": "node test/rewrite.test.js"
   },
   "engines": {
     "node": ">=16"
   },
+  "keywords": [
+    "git",
+    "worktree",
+    "docker",
+    "docker-compose",
+    "dev-environment",
+    "cli",
+    "parallel",
+    "branches"
+  ],
   "license": "MIT",
   "author": "francofl99",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/francofl99/benv.git"
+  },
+  "bugs": {
+    "url": "https://github.com/francofl99/benv/issues"
+  },
+  "homepage": "https://github.com/francofl99/benv#readme",
   "files": [
     "bin/",
     "skills/",
