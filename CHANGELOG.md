@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- `benv open` with no editor flag now opens an interactive shell in the instance directory
+  (subshell — `exit` to return) instead of falling back to a configured editor. Pass
+  `--<editor>` to open an editor. The manifest `editor` field is no longer used.
+
 ## [0.1.0] — 2026-07-13
 
 First release.

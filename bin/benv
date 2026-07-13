@@ -624,16 +624,22 @@ function cmdOpen(args) {
   const r = resolveInstance(m, state, args._[0]);
   const dir = args.root ? r.dir : (r.repoDir || r.dir);
 
-  // Editor precedence: --editor <cmd> > any --<name> shorthand (open-ended: --code, --zed,
-  // --cursor, --claude, … → runs `<name> <dir>`) > manifest.editor > $VISUAL/$EDITOR.
+  // Editor: --editor <cmd>, or any --<name> shorthand (open-ended: --code, --zed, --claude,
+  // … → runs `<name> <dir>`). With no editor flag, drop into a shell in the directory.
   let cmd = typeof args.editor === 'string' ? args.editor : null;
   if (!cmd) {
     const flag = Object.keys(args).find((k) => k !== '_' && !OPEN_RESERVED_FLAGS.has(k) && args[k] === true);
     if (flag) cmd = flag;
   }
-  if (!cmd) cmd = m.raw.editor || process.env.VISUAL || process.env.EDITOR || null;
+
   if (!cmd) {
-    die('no editor given. Use --<editor> (e.g. --code, --zed, --claude), --editor <cmd>, set "editor" in .benv.json, or $EDITOR.');
+    // No editor requested → open an interactive shell already in the directory.
+    // (A child process can't change the parent shell's cwd; a subshell is the equivalent —
+    // type `exit` to return.)
+    const shell = process.env.SHELL || '/bin/sh';
+    console.log(`cd ${dir}  (subshell — type 'exit' to return)`);
+    cp.spawnSync(shell, { stdio: 'inherit', cwd: dir });
+    return;
   }
 
   const parts = cmd.split(/\s+/);
@@ -668,8 +674,9 @@ usage:
   benv up <branch> --isolated-db   full stack with its own fresh DB volumes instead
   benv ls                       list instances
   benv open [name] [--<editor>|--editor <cmd>] [--root]
-                                open an instance in an editor: --<editor> runs "<editor> <dir>"
-                                (e.g. --code, --zed, --cursor, --claude); --root = whole workspace
+                                with no editor: open a shell in the instance dir (subshell).
+                                --<editor> runs "<editor> <dir>" (e.g. --code, --zed, --claude);
+                                --root targets the whole workspace instead of the repo dir
   benv ports <name>             show port mappings for an instance
   benv down <name>              stop an instance's stack (keeps the dir)
   benv rm <name>                stop + delete an instance

@@ -36,7 +36,8 @@ benv up <branch> [--name N]    # clona workspace + checkout branch + levanta app
                                #   DEFAULT: comparte la BD del stack principal (mismo dato, intacta)
 benv up <branch> --isolated-db # variante: stack completo con volúmenes de BD propios y frescos
 benv ls                        # lista instancias (branch, offset, project, dir)
-benv open [name] --zed         # abre el repo de la instancia en un editor (--code/--cursor/--editor <cmd>)
+benv open [name]               # abre una shell en el dir de la instancia (subshell; 'exit' para volver)
+benv open [name] --code        # o abre en un editor: --code/--zed/--cursor/--claude/--editor <cmd>
                                #   sin flag usa "editor" del manifiesto o $EDITOR; --root abre todo el workspace
 benv ports <name>              # muestra el mapeo de puertos de una instancia
 benv down <name>               # baja el stack (conserva el dir)

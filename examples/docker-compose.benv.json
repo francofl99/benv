@@ -1,6 +1,5 @@
 {
   "name": "myproject",
-  "editor": "zed",
   "workspaceRoot": ".",
   "repoSubdir": "app",
   "instancesRoot": "~/.benv/myproject/instances",

@@ -11,7 +11,8 @@ Cargá la skill `benv` y seguí ese playbook. Requiere un `.benv.json` en la ra�
 | Levantar una branch en otro puerto | `benv up <branch>` |
 | Igual con BD propia fresca | `benv up <branch> --isolated-db` |
 | Ver instancias activas | `benv ls` |
-| Abrir el editor en la instancia | `benv open <name> --code` (o `--zed`/`--cursor`/`--editor <cmd>`) |
+| Abrir una shell en el dir de la instancia | `benv open <name>` (subshell) |
+| Abrir la instancia en un editor | `benv open <name> --code` (o `--zed`/`--cursor`/`--claude`/`--editor <cmd>`) |
 | Ver puertos | `benv ports <name>` |
 | Bajar y borrar | `benv rm <name>` |
 
