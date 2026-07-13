@@ -3,29 +3,26 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.1.0] — 2026-07-13
 
-### Changed
-- Renamed the Claude skill `parallel-env` → `benv`, and `install.sh` now also installs a
-  global `/benv` slash command into `~/.claude/commands` (skill + command, both from this repo).
-- `benv open` now accepts any `--<editor>` flag (open-ended): `--code`, `--zed`, `--cursor`,
-  `--claude`, … run `<editor> <dir>`. Flag parsing made boolean-by-default so a shorthand
-  never swallows the instance name.
+First release.
 
-### Added
-- `benv open [name]` to open an instance in an editor (`--zed`/`--code`/`--cursor`/`--editor`,
-  `--root` for the whole workspace).
-- New branches are created from the latest default branch (`main`/`master`) when the requested
+### Features
+- Commands: `init`, `up`, `ls`, `open`, `ports`, `down`, `rm`, `prune`, `--version`.
+- Copy-on-write workspace clones (`cp -c` on APFS; `rsync` fallback elsewhere).
+- Docker Compose isolation: host-port offset + free-port allocation so instances never collide.
+- **Shared DB mode (default)** — runs only `appServices` and joins the main stack's external
+  networks, so the branch shares the main DB (untouched). **Isolated mode (`--isolated-db`)**
+  runs the full stack with its own fresh volumes.
+- Creates a new branch from the latest default branch (`main`/`master`) when the requested
   branch exists neither locally nor on origin.
-- Shared-DB mode (default) vs isolated-DB mode (`--isolated-db`).
-- `postUp` provisioning hook.
-- `benv --version`.
-- Test suite (`npm test`) and standards docs (CONTRIBUTING, SECURITY, CHANGELOG).
+- `postUp` provisioning hook (env: `BENV_DIR`/`BENV_REPO`/`BENV_NAME`/`BENV_PORT_OFFSET`/`BENV_PROJECT`).
+- `benv open` accepts any `--<editor>` flag and runs `<editor> <dir>` in the foreground
+  (e.g. `--code`, `--zed`, `--claude`); `--root` opens the whole workspace.
+- Per-project `.benv.json` manifest; command-based (`up`/`down`) support for non-Docker stacks.
+- `install.sh` also installs a Claude skill (`benv`) and `/benv` slash command into `~/.claude`.
 
 ### Security
 - All external commands are invoked without a shell (explicit argv), removing command-injection
-  risk from branch names, paths, and other inputs.
-
-## [0.1.0]
-- Initial release: `init`, `up`, `ls`, `ports`, `down`, `rm`, `prune`; copy-on-write workspace
-  clones; docker-compose port/name isolation; per-project `.benv.json` manifest.
+  risk from branch names, paths, and other inputs. Only manifest-authored `up`/`down`/`postUp`
+  run in a shell (trusted config).
