@@ -602,7 +602,8 @@ function cmdRm(args) {
   console.log(`✔ "${key}" removed.`);
 }
 
-const KNOWN_EDITORS = ['zed', 'code', 'cursor', 'subl', 'webstorm', 'idea', 'nvim', 'vim'];
+// Flags that are NOT the editor name when resolving `benv open`.
+const OPEN_RESERVED_FLAGS = new Set(['root', 'editor', 'name']);
 
 function resolveInstance(m, state, rawName) {
   const key = slug(rawName || '');
@@ -623,12 +624,16 @@ function cmdOpen(args) {
   const r = resolveInstance(m, state, args._[0]);
   const dir = args.root ? r.dir : (r.repoDir || r.dir);
 
-  // Editor precedence: shorthand flag > --editor <cmd> > manifest.editor > $VISUAL/$EDITOR.
-  let cmd = KNOWN_EDITORS.find((e) => args[e]) || null;
-  if (!cmd && typeof args.editor === 'string') cmd = args.editor;
+  // Editor precedence: --editor <cmd> > any --<name> shorthand (open-ended: --code, --zed,
+  // --cursor, --claude, … → runs `<name> <dir>`) > manifest.editor > $VISUAL/$EDITOR.
+  let cmd = typeof args.editor === 'string' ? args.editor : null;
+  if (!cmd) {
+    const flag = Object.keys(args).find((k) => k !== '_' && !OPEN_RESERVED_FLAGS.has(k) && args[k] === true);
+    if (flag) cmd = flag;
+  }
   if (!cmd) cmd = m.raw.editor || process.env.VISUAL || process.env.EDITOR || null;
   if (!cmd) {
-    die('no editor given. Use --zed/--code/--cursor, --editor <cmd>, set "editor" in .benv.json, or $EDITOR.');
+    die('no editor given. Use --<editor> (e.g. --code, --zed, --claude), --editor <cmd>, set "editor" in .benv.json, or $EDITOR.');
   }
 
   const parts = cmd.split(/\s+/);
@@ -668,8 +673,9 @@ usage:
                                 (default: SHARES the main stack's DB — same data, untouched)
   benv up <branch> --isolated-db   full stack with its own fresh DB volumes instead
   benv ls                       list instances
-  benv open [name] [--zed|--code|--cursor|--editor <cmd>] [--root]
-                                open an instance in an editor (repo dir; --root = whole workspace)
+  benv open [name] [--<editor>|--editor <cmd>] [--root]
+                                open an instance in an editor: --<editor> runs "<editor> <dir>"
+                                (e.g. --code, --zed, --cursor, --claude); --root = whole workspace
   benv ports <name>             show port mappings for an instance
   benv down <name>              stop an instance's stack (keeps the dir)
   benv rm <name>                stop + delete an instance
@@ -681,24 +687,24 @@ usage:
 // Arg parsing + dispatch
 // ---------------------------------------------------------------------------
 
-const BOOLEAN_FLAGS = new Set([
-  'zed', 'code', 'cursor', 'subl', 'webstorm', 'idea', 'nvim', 'vim',
-  'root', 'isolated-db', 'isolated', 'fresh-db',
-]);
+// Only these flags consume the following token as their value. Everything else is a boolean
+// (so shorthands like --code / --zed / --claude never swallow a positional such as the
+// instance name), while --flag=value always works too.
+const VALUE_FLAGS = new Set(['editor', 'name']);
 
 function parseArgs(argv) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
-      let key = a.slice(2);
+      const key = a.slice(2);
       const eq = key.indexOf('=');
       if (eq !== -1) {
         out[key.slice(0, eq)] = key.slice(eq + 1);
         continue;
       }
       const next = argv[i + 1];
-      if (!BOOLEAN_FLAGS.has(key) && next && !next.startsWith('--')) {
+      if (VALUE_FLAGS.has(key) && next !== undefined && !next.startsWith('--')) {
         out[key] = next;
         i++;
       } else {

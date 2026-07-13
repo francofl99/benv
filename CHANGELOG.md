@@ -8,6 +8,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Renamed the Claude skill `parallel-env` → `benv`, and `install.sh` now also installs a
   global `/benv` slash command into `~/.claude/commands` (skill + command, both from this repo).
+- `benv open` now accepts any `--<editor>` flag (open-ended): `--code`, `--zed`, `--cursor`,
+  `--claude`, … run `<editor> <dir>`. Flag parsing made boolean-by-default so a shorthand
+  never swallows the instance name.
 
 ### Added
 - `benv open [name]` to open an instance in an editor (`--zed`/`--code`/`--cursor`/`--editor`,
