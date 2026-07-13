@@ -1,6 +1,9 @@
 {
-  "name": "benv",
+  "name": "@francofl99/benv",
   "version": "0.2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Parallel branch environments: run any branch on its own ports with a copy-on-write workspace clone, instead of git worktrees.",
   "bin": {
     "benv": "bin/benv"

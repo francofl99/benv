@@ -1,15 +1,50 @@
 # benv — parallel branch environments
 
+[![npm](https://img.shields.io/npm/v/%40francofl99%2Fbenv?color=cb3837&logo=npm)](https://www.npmjs.com/package/@francofl99/benv)
+[![license](https://img.shields.io/github/license/francofl99/benv)](LICENSE)
+[![node](https://img.shields.io/node/v/%40francofl99%2Fbenv)](package.json)
+
 Run any branch of a project on its **own ports**, in its **own copy of the workspace**,
 with its **own service stack** — so you can work several branches in parallel without the
 friction of git worktrees (which share the checkout your tooling/Docker mounts).
 
-On macOS/APFS the copy is a **copy-on-write clone** (`cp -c`), so it's near-instant and
-near-zero disk until files change.
+> Built it because running several AI coding agents in parallel on git worktrees was painful —
+> they fought over the one checkout my Docker stack mounts. benv gives each branch its own
+> running copy on its own ports instead.
+
+On macOS/APFS (and Linux Btrfs/XFS/ZFS) the copy is a **copy-on-write clone**, so it's
+near-instant and near-zero disk until files change.
 
 - Single-file Node CLI, **no dependencies** (only Node core modules).
 - **Project-agnostic**: everything project-specific lives in a `.benv.json` manifest.
 - Works with Docker Compose out of the box, or any stack via `up`/`down` commands.
+
+## Demo
+
+```console
+$ benv up my-feature
+Cloning workspace → ~/.benv/myproject/instances/my-feature (CoW)
+Checking out my-feature from origin
+Starting app on shared DB (project=myproject-my-feature, offset=+100)
+
+✔ instance "my-feature" up
+  branch:  my-feature
+  dir:     ~/.benv/myproject/instances/my-feature
+  offset:  +100
+  db:      shared with main (untouched)
+  ports:
+    8080 → 8180  (→80)
+
+$ benv ls
+NAME         BRANCH       OFFSET   PROJECT               DIR
+my-feature   my-feature   +100     myproject-my-feature  ~/.benv/myproject/instances/my-feature
+
+$ benv open my-feature --code     # or bare `benv open my-feature` to drop into a shell there
+```
+
+<!-- Tip: record a real GIF with vhs (charmbracelet/vhs) or asciinema and embed it here. -->
+
+
 
 ## Requirements
 
@@ -20,6 +55,15 @@ near-zero disk until files change.
   a full copy is used on other filesystems.
 
 ## Install
+
+**Via npm** (just the CLI):
+
+```bash
+npm i -g @francofl99/benv     # then: benv --version
+# or run without installing:  npx @francofl99/benv up <branch>
+```
+
+**Via git clone** (CLI + Claude Code integration):
 
 ```bash
 git clone git@github.com:francofl99/benv.git ~/Projects/benv
