@@ -376,15 +376,19 @@ function cmdInit() {
 function cloneWorkspace(m, instanceDir) {
   fs.mkdirSync(path.dirname(instanceDir), { recursive: true });
   if (fs.existsSync(instanceDir)) die(`instance dir already exists: ${instanceDir}`);
-  // Copy-on-write clone on APFS; falls back to a normal recursive copy elsewhere.
   const src = m.workspaceRoot.replace(/\/$/, '');
-  const useClone = process.platform === 'darwin';
-  console.log(`Cloning workspace → ${instanceDir} ${useClone ? '(CoW)' : ''}`);
-  if (useClone && m.excludes.length === 0) {
-    // Fast path: whole-tree clonefile.
-    runFile('cp', ['-c', '-R', src, instanceDir]);
+  // Copy-on-write where the platform/filesystem supports it (near-instant, near-zero disk
+  // until files change): clonefile on macOS/APFS, reflink on Linux (Btrfs/XFS/ZFS —
+  // `--reflink=auto` silently falls back to a full copy on other filesystems like ext4).
+  // rsync is used only when excludes are configured (it honours them).
+  const cowFlag = process.platform === 'darwin'
+    ? '-c'
+    : (process.platform === 'linux' ? '--reflink=auto' : null);
+  if (cowFlag && m.excludes.length === 0) {
+    console.log(`Cloning workspace → ${instanceDir} (CoW)`);
+    runFile('cp', [cowFlag, '-R', src, instanceDir]);
   } else {
-    // rsync is the portable option and honours excludes.
+    console.log(`Cloning workspace → ${instanceDir}`);
     fs.mkdirSync(instanceDir, { recursive: true });
     const rsyncArgs = ['-a', ...m.excludes.map((e) => `--exclude=${e}`), `${src}/`, `${instanceDir}/`];
     runFile('rsync', rsyncArgs);

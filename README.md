@@ -16,7 +16,8 @@ near-zero disk until files change.
 - **Node 16+**
 - **git**
 - **Docker Compose** (for `compose`-based projects)
-- macOS/APFS for copy-on-write clones; on other platforms benv falls back to `rsync`.
+- Copy-on-write clones on macOS/APFS (`cp -c`) and Linux Btrfs/XFS/ZFS (`cp --reflink=auto`);
+  a full copy is used on other filesystems.
 
 ## Install
 
@@ -133,7 +134,8 @@ it in a wait/retry.
 
 ## How it works
 
-1. **Clone** `workspaceRoot` to the instance dir (`cp -c -R` CoW on APFS; `rsync` elsewhere).
+1. **Clone** `workspaceRoot` to the instance dir — copy-on-write on macOS/APFS (`cp -c`) and
+   Linux Btrfs/XFS/ZFS (`cp --reflink=auto`); a full copy otherwise (or `rsync` with excludes).
 2. **Checkout** the branch in `repoSubdir` (`-f`, since the clone is throwaway):
    existing local branch → checkout; else on origin → fetch + checkout; else **create a new
    branch from the latest default branch** (`origin/main` or `origin/master`, fetched fresh).

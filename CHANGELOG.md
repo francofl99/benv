@@ -3,7 +3,11 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.2.0] — 2026-07-13
+
+### Added
+- Linux copy-on-write clones via `cp --reflink=auto` (Btrfs/XFS/ZFS); falls back to a full
+  copy on other filesystems. Previously only macOS/APFS got CoW.
 
 ### Changed
 - `benv open` with no editor flag now opens an interactive shell in the instance directory
