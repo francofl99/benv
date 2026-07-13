@@ -1,0 +1,17 @@
+{
+  "name": "myproject",
+  "editor": "zed",
+  "workspaceRoot": ".",
+  "repoSubdir": "app",
+  "instancesRoot": "~/.benv/myproject/instances",
+  "portOffsetStep": 100,
+  "compose": {
+    "file": "docker-compose.yml",
+    "projectPrefix": "myproject",
+    "rewriteNames": true,
+    "appServices": ["web", "worker"]
+  },
+  "postUp": [
+    "docker exec $BENV_PROJECT-web-1 php artisan migrate --force"
+  ]
+}

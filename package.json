@@ -1,0 +1,21 @@
+{
+  "name": "benv",
+  "version": "0.1.0",
+  "description": "Parallel branch environments: run any branch on its own ports with a copy-on-write workspace clone, instead of git worktrees.",
+  "bin": {
+    "benv": "bin/benv"
+  },
+  "scripts": {
+    "postinstall": "true"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT",
+  "author": "francofl99",
+  "files": [
+    "bin/",
+    "skills/",
+    "examples/"
+  ]
+}

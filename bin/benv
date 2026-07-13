@@ -1,0 +1,700 @@
+#!/usr/bin/env node
+'use strict';
+
+/*
+ * benv — parallel branch environments.
+ *
+ * Instead of git worktrees (which share the main checkout Docker mounts),
+ * benv makes an isolated copy of the workspace per branch, on its own ports,
+ * with its own service stack. On APFS the copy is a copy-on-write clone
+ * (`cp -c`) so it is near-instant and near-zero disk until files change.
+ *
+ * Generic across projects via a `.benv.json` manifest at the workspace root.
+ * No external npm dependencies.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const cp = require('child_process');
+
+const HOME = os.homedir();
+
+function die(msg) {
+  console.error(`benv: ${msg}`);
+  process.exit(1);
+}
+
+function expandHome(p) {
+  if (p === '~') return HOME;
+  if (p && p.startsWith('~/')) return path.join(HOME, p.slice(2));
+  return p;
+}
+
+function sh(cmd, opts = {}) {
+  return cp.execSync(cmd, { stdio: 'pipe', encoding: 'utf8', ...opts });
+}
+
+function run(cmd, opts = {}) {
+  // Streams output to the user (for docker compose etc).
+  cp.execSync(cmd, { stdio: 'inherit', ...opts });
+}
+
+function slug(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+// ---------------------------------------------------------------------------
+// Manifest discovery + defaults
+// ---------------------------------------------------------------------------
+
+function findManifest(startDir) {
+  let dir = startDir;
+  for (;;) {
+    const candidate = path.join(dir, '.benv.json');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function loadManifest() {
+  const file = findManifest(process.cwd());
+  if (!file) {
+    die("no .benv.json found (run `benv init` at the workspace root).");
+  }
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    die(`invalid .benv.json: ${e.message}`);
+  }
+  const manifestDir = path.dirname(file);
+  const name = raw.name || slug(path.basename(manifestDir));
+  const workspaceRoot = path.resolve(manifestDir, raw.workspaceRoot || '.');
+  const repoSubdir = raw.repoSubdir || '.';
+  const instancesRoot = expandHome(raw.instancesRoot || path.join('~/.benv', name, 'instances'));
+  const m = {
+    file,
+    manifestDir,
+    name,
+    workspaceRoot,
+    repoSubdir,
+    instancesRoot,
+    portOffsetStep: raw.portOffsetStep || 100,
+    compose: raw.compose || null,
+    up: raw.up || null,
+    down: raw.down || null,
+    postUp: raw.postUp || [],
+    excludes: raw.excludes || [],
+    raw,
+  };
+  return m;
+}
+
+function stateFile(m) {
+  return path.join(expandHome(path.join('~/.benv', m.name)), 'state.json');
+}
+
+function loadState(m) {
+  const f = stateFile(m);
+  if (!fs.existsSync(f)) return { instances: {} };
+  try {
+    return JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch {
+    return { instances: {} };
+  }
+}
+
+function saveState(m, state) {
+  const f = stateFile(m);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify(state, null, 2));
+}
+
+function nextSlot(state) {
+  const used = new Set(Object.values(state.instances).map((i) => i.slot));
+  let s = 1;
+  while (used.has(s)) s++;
+  return s;
+}
+
+function portFree(port) {
+  // Synchronous-ish check: try to bind with a throwaway node process.
+  try {
+    cp.execSync(
+      `node -e 'const n=require("net");const s=n.createServer();s.once("error",()=>process.exit(1));s.listen(${port},()=>{s.close(()=>process.exit(0))})'`,
+      { stdio: 'ignore', timeout: 3000 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Finds a slot whose remapped host ports (as produced by mapFn(offset)) are all free.
+function findFreeSlot(state, m, mapFn) {
+  const usedSlots = new Set(Object.values(state.instances).map((i) => i.slot));
+  for (let slot = 1; slot <= 200; slot++) {
+    if (usedSlots.has(slot)) continue;
+    const offset = slot * m.portOffsetStep;
+    const portMap = mapFn(offset);
+    if (portMap.every((p) => portFree(p.to))) return { slot, offset };
+  }
+  die('could not find a free port offset after 200 slots.');
+}
+
+// ---------------------------------------------------------------------------
+// Compose rewriting (host ports offset + name isolation)
+// ---------------------------------------------------------------------------
+
+function leadingSpaces(line) {
+  const m = line.match(/^(\s*)/);
+  return m ? m[1].length : 0;
+}
+
+/*
+ * Rewrites a docker-compose file text:
+ *  - host ports get `offset` added (only inside `ports:` blocks)
+ *  - top-level network/volume `name:` and any `container_name:` get the
+ *    project prefix swapped so instances never collide.
+ * Returns { text, portMap: [{from, to, container}] }.
+ */
+function rewriteCompose(text, { offset, prefix, project }) {
+  const lines = text.split('\n');
+  const out = [];
+  const portMap = [];
+  const projU = project.replace(/-/g, '_');
+
+  let inPorts = false;
+  let portsIndent = -1;
+
+  for (const line of lines) {
+    const indent = leadingSpaces(line);
+    const trimmed = line.trim();
+
+    if (inPorts) {
+      // Leave the ports block when indentation returns to/above the key level
+      // on a non-list line.
+      if (trimmed !== '' && !trimmed.startsWith('- ') && indent <= portsIndent) {
+        inPorts = false;
+      }
+    }
+
+    if (!inPorts && trimmed === 'ports:') {
+      inPorts = true;
+      portsIndent = indent;
+      out.push(line);
+      continue;
+    }
+
+    if (inPorts && trimmed.startsWith('- ')) {
+      // Match:  - "8080:80"  |  - 8080:80  |  - "8080:80/tcp"  |  - "127.0.0.1:8080:80"
+      const mm = line.match(
+        /^(\s*-\s*"?)(?:([\d.]+):)?(\d+):(\d+)(\/(?:tcp|udp))?("?\s*(?:#.*)?)$/,
+      );
+      if (mm) {
+        const [, pre, bindIp, hostPort, containerPort, proto = '', post] = mm;
+        const newHost = String(Number(hostPort) + offset);
+        const ipPart = bindIp ? `${bindIp}:` : '';
+        out.push(`${pre}${ipPart}${newHost}:${containerPort}${proto}${post}`);
+        portMap.push({ from: Number(hostPort), to: Number(newHost), container: Number(containerPort) });
+        continue;
+      }
+    }
+
+    // Isolate explicit names on networks/volumes/containers.
+    const nameMatch = line.match(/^(\s*(?:name|container_name):\s*)(.+?)(\s*)$/);
+    if (nameMatch) {
+      const [, key, value, tail] = nameMatch;
+      let v = value.replace(/^["']|["']$/g, '');
+      if (prefix && (v === prefix || v.startsWith(`${prefix}_`) || v.startsWith(`${prefix}-`))) {
+        v = projU + v.slice(prefix.length);
+      } else {
+        v = `${projU}_${v}`;
+      }
+      out.push(`${key}${v}${tail}`);
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  return { text: out.join('\n'), portMap };
+}
+
+/*
+ * Shared-DB transform: the instance runs ONLY the app services on new ports and
+ * joins the main stack's existing networks (external) so service names like `db`
+ * resolve to the MAIN containers. No data services start, no volumes are created,
+ * nothing of the main stack is touched. Requires the main stack to be running.
+ * Returns { text, portMap } where portMap only includes the app services' ports.
+ */
+function sharedCompose(text, { offset, appServices }) {
+  const appSet = new Set(appServices);
+  const lines = text.split('\n');
+  const out = [];
+  const portMap = [];
+  const nets = []; // { key, name }
+
+  let topSection = null; // 'services' | 'networks' | 'volumes' | other
+  let currentService = null;
+  let inPorts = false;
+  let portsIndent = -1;
+  let netKey = null;
+
+  for (const line of lines) {
+    const indent = leadingSpaces(line);
+    const trimmed = line.trim();
+
+    // Top-level key (indent 0) starts a new section.
+    if (indent === 0 && /^[A-Za-z0-9_-]+:/.test(trimmed)) {
+      topSection = trimmed.replace(/:.*$/, '');
+      currentService = null;
+      inPorts = false;
+      if (topSection === 'networks') {
+        netKey = null;
+        continue; // networks block is regenerated at the end; skip originals
+      }
+      out.push(line);
+      continue;
+    }
+
+    if (topSection === 'networks') {
+      const keyM = line.match(/^  ([A-Za-z0-9_-]+):\s*$/);
+      if (keyM) { netKey = keyM[1]; nets.push({ key: netKey, name: netKey }); }
+      const nameM = line.match(/^    name:\s*(.+?)\s*$/);
+      if (nameM && nets.length) nets[nets.length - 1].name = nameM[1].replace(/^["']|["']$/g, '');
+      continue; // drop original network lines
+    }
+
+    if (topSection === 'services') {
+      const svcM = line.match(/^  ([A-Za-z0-9_-]+):\s*$/);
+      if (svcM) { currentService = svcM[1]; inPorts = false; }
+
+      if (inPorts && trimmed !== '' && !trimmed.startsWith('- ') && indent <= portsIndent) inPorts = false;
+      if (trimmed === 'ports:') { inPorts = true; portsIndent = indent; out.push(line); continue; }
+
+      if (inPorts && trimmed.startsWith('- ')) {
+        const mm = line.match(/^(\s*-\s*"?)(?:([\d.]+):)?(\d+):(\d+)(\/(?:tcp|udp))?("?\s*(?:#.*)?)$/);
+        if (mm) {
+          const [, pre, bindIp, hostPort, containerPort, proto = '', post] = mm;
+          const newHost = String(Number(hostPort) + offset);
+          const ipPart = bindIp ? `${bindIp}:` : '';
+          out.push(`${pre}${ipPart}${newHost}:${containerPort}${proto}${post}`);
+          if (appSet.has(currentService)) {
+            portMap.push({ from: Number(hostPort), to: Number(newHost), container: Number(containerPort), service: currentService });
+          }
+          continue;
+        }
+      }
+    }
+
+    out.push(line);
+  }
+
+  // Regenerate networks as external so the instance joins the main stack's nets.
+  const netLines = ['networks:'];
+  for (const n of nets) {
+    netLines.push(`  ${n.key}:`);
+    netLines.push(`    name: ${n.name}`);
+    netLines.push('    external: true');
+  }
+  return { text: out.join('\n') + '\n' + netLines.join('\n') + '\n', portMap };
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+function cmdInit() {
+  const cwd = process.cwd();
+  const target = path.join(cwd, '.benv.json');
+  if (fs.existsSync(target)) die('.benv.json already exists here.');
+
+  const hasCompose = fs.existsSync(path.join(cwd, 'docker-compose.yml'));
+  const name = slug(path.basename(cwd));
+  const manifest = {
+    name,
+    workspaceRoot: '.',
+    repoSubdir: '.',
+    instancesRoot: `~/.benv/${name}/instances`,
+    portOffsetStep: 100,
+  };
+  if (hasCompose) {
+    manifest.compose = {
+      file: 'docker-compose.yml',
+      projectPrefix: name,
+      rewriteNames: true,
+    };
+  } else {
+    manifest.up = 'echo "define your up command; env: $BENV_DIR $BENV_NAME $BENV_PORT_OFFSET"';
+    manifest.down = 'echo "define your down command"';
+  }
+  fs.writeFileSync(target, JSON.stringify(manifest, null, 2) + '\n');
+  console.log(`Created ${target}`);
+  console.log('Edit it, then: benv up <branch>');
+}
+
+function cloneWorkspace(m, instanceDir) {
+  fs.mkdirSync(path.dirname(instanceDir), { recursive: true });
+  if (fs.existsSync(instanceDir)) die(`instance dir already exists: ${instanceDir}`);
+  // Copy-on-write clone on APFS; falls back to a normal recursive copy elsewhere.
+  const src = m.workspaceRoot.replace(/\/$/, '');
+  const excludeArgs = m.excludes
+    .map((e) => `--exclude=${JSON.stringify(e)}`)
+    .join(' ');
+  const useClone = process.platform === 'darwin';
+  console.log(`Cloning workspace → ${instanceDir} ${useClone ? '(CoW)' : ''}`);
+  if (useClone && m.excludes.length === 0) {
+    // Fast path: whole-tree clonefile.
+    run(`cp -c -R ${JSON.stringify(src)} ${JSON.stringify(instanceDir)}`);
+  } else {
+    // rsync respects excludes and still uses clonefile via --link-dest? No —
+    // use ditto/rsync. rsync is the portable option with excludes.
+    fs.mkdirSync(instanceDir, { recursive: true });
+    run(`rsync -a ${excludeArgs} ${JSON.stringify(src + '/')} ${JSON.stringify(instanceDir + '/')}`);
+  }
+}
+
+function cmdUp(args) {
+  const m = loadManifest();
+  const branch = args._[0];
+  if (!branch) die('usage: benv up <branch> [--name <name>]');
+  const name = slug(args.name || branch);
+  if (!name) die('could not derive a valid instance name.');
+
+  const state = loadState(m);
+  if (state.instances[name]) die(`instance "${name}" already exists (benv rm ${name} to recreate).`);
+
+  const instanceDir = path.join(m.instancesRoot, name);
+  const repoDir = path.join(instanceDir, m.repoSubdir);
+  const project = m.compose ? slug(`${(m.compose.projectPrefix || m.name)}-${name}`) : `${m.name}-${name}`;
+
+  // DB mode: default is SHARED (instance runs only the app on new ports and joins the
+  // main stack's DB/networks — same data, main untouched). `--isolated-db` runs the full
+  // stack with its own fresh volumes.
+  const mode = (args['isolated-db'] || args.isolated || args['fresh-db']) ? 'isolated' : 'shared';
+  const appServices = (m.compose && m.compose.appServices) || [];
+
+  const composeTransform = (original, off) =>
+    mode === 'shared'
+      ? sharedCompose(original, { offset: off, appServices })
+      : rewriteCompose(original, { offset: off, prefix: m.compose.projectPrefix || m.name, project });
+
+  // Slot/offset: for compose, pick the lowest slot whose remapped host ports are all
+  // free (so we never collide with the main stack or another instance). Otherwise
+  // fall back to the next unused slot.
+  let slot;
+  let offset;
+  if (m.compose) {
+    if (mode === 'shared' && appServices.length === 0) {
+      die('shared DB mode needs compose.appServices in .benv.json (services to run per instance). Use --isolated-db for a full fresh stack.');
+    }
+    const composeSrcPath = path.join(m.workspaceRoot, m.compose.file);
+    if (!fs.existsSync(composeSrcPath)) die(`compose file not found: ${composeSrcPath}`);
+    const originalCompose = fs.readFileSync(composeSrcPath, 'utf8');
+    console.log('Finding a free port offset...');
+    ({ slot, offset } = findFreeSlot(state, m, (off) => composeTransform(originalCompose, off).portMap));
+  } else {
+    slot = nextSlot(state);
+    offset = slot * m.portOffsetStep;
+  }
+
+  cloneWorkspace(m, instanceDir);
+
+  // Switch branch in the cloned repo.
+  console.log(`Checking out ${branch} in ${repoDir}`);
+  try {
+    // -f: the clone is a throwaway copy; discard any uncommitted changes carried over
+    // from the source working tree so the instance starts on a clean target branch.
+    sh(`git -C ${JSON.stringify(repoDir)} checkout -f ${JSON.stringify(branch)}`);
+  } catch {
+    try {
+      sh(`git -C ${JSON.stringify(repoDir)} fetch origin ${JSON.stringify(branch)}`);
+      sh(`git -C ${JSON.stringify(repoDir)} checkout -f -B ${JSON.stringify(branch)} FETCH_HEAD`);
+    } catch (e) {
+      fs.rmSync(instanceDir, { recursive: true, force: true });
+      die(`could not checkout branch "${branch}": ${e.message}`);
+    }
+  }
+
+  const record = { name, branch, slot, offset, dir: instanceDir, repoDir, project, mode: m.compose ? mode : 'command', created: new Date().toISOString() };
+  let portMap = [];
+
+  if (m.compose) {
+    const composeSrc = path.join(instanceDir, m.compose.file);
+    if (!fs.existsSync(composeSrc)) {
+      fs.rmSync(instanceDir, { recursive: true, force: true });
+      die(`compose file not found in clone: ${composeSrc}`);
+    }
+    const original = fs.readFileSync(composeSrc, 'utf8');
+    const rewritten = composeTransform(original, offset);
+    portMap = rewritten.portMap;
+    // Write to a benv-specific compose file so the original stays intact.
+    const composeOut = path.join(instanceDir, 'docker-compose.benv.yml');
+    fs.writeFileSync(composeOut, rewritten.text);
+    record.composeFile = composeOut;
+    record.portMap = portMap;
+
+    if (mode === 'shared') {
+      // Only the app services; --no-deps so depends_on never resurrects data services.
+      // Networks are external → joins the main stack; nothing of main is created/removed.
+      console.log(`Starting app on shared DB (project=${project}, offset=+${offset})`);
+      run(
+        `docker compose -p ${JSON.stringify(project)} -f ${JSON.stringify(composeOut)} up -d --no-deps ${appServices.map((s) => JSON.stringify(s)).join(' ')}`,
+        { cwd: instanceDir },
+      );
+    } else {
+      console.log(`Starting full stack, isolated DB (project=${project}, offset=+${offset})`);
+      run(
+        `docker compose -p ${JSON.stringify(project)} -f ${JSON.stringify(composeOut)} up -d`,
+        { cwd: instanceDir },
+      );
+    }
+  } else if (m.up) {
+    console.log(`Running up command (offset=+${offset})`);
+    run(m.up, {
+      cwd: repoDir,
+      env: { ...process.env, BENV_DIR: instanceDir, BENV_REPO: repoDir, BENV_NAME: name, BENV_PORT_OFFSET: String(offset), BENV_PROJECT: project },
+    });
+  } else {
+    die('manifest has neither `compose` nor `up`.');
+  }
+
+  state.instances[name] = record;
+  saveState(m, state);
+
+  // Project-specific provisioning after the stack is up (migrations, config install,
+  // composer/npm, etc). Each command runs with BENV_* env; failures warn but don't
+  // roll back the instance.
+  if (m.postUp.length) {
+    const hookEnv = { ...process.env, BENV_DIR: instanceDir, BENV_REPO: repoDir, BENV_NAME: name, BENV_PORT_OFFSET: String(offset), BENV_PROJECT: project };
+    for (const c of m.postUp) {
+      console.log(`postUp: ${c}`);
+      try {
+        run(c, { cwd: instanceDir, env: hookEnv });
+      } catch (e) {
+        console.error(`  warn: postUp command failed: ${e.message}`);
+      }
+    }
+  }
+
+  console.log('');
+  console.log(`✔ instance "${name}" up`);
+  console.log(`  branch:  ${branch}`);
+  console.log(`  dir:     ${instanceDir}`);
+  console.log(`  project: ${project}`);
+  console.log(`  offset:  +${offset}`);
+  if (m.compose) {
+    console.log(`  db:      ${mode === 'shared' ? 'shared with main (untouched)' : 'isolated (fresh volumes)'}`);
+  }
+  if (portMap.length) {
+    console.log('  ports:');
+    for (const p of portMap) console.log(`    ${p.from} → ${p.to}  (→${p.container})`);
+  }
+}
+
+function cmdLs() {
+  const m = loadManifest();
+  const state = loadState(m);
+  const rows = Object.values(state.instances);
+  if (rows.length === 0) {
+    console.log('no instances.');
+    return;
+  }
+  console.log(['NAME', 'BRANCH', 'OFFSET', 'PROJECT', 'DIR'].join('\t'));
+  for (const r of rows) {
+    const exists = fs.existsSync(r.dir) ? '' : ' (dir missing)';
+    console.log([r.name, r.branch, `+${r.offset}`, r.project, r.dir + exists].join('\t'));
+  }
+}
+
+function cmdPorts(args) {
+  const m = loadManifest();
+  const state = loadState(m);
+  const r = state.instances[slug(args._[0] || '')];
+  if (!r) die('unknown instance.');
+  if (!r.portMap || !r.portMap.length) {
+    console.log('no port mappings recorded (command-based instance).');
+    return;
+  }
+  for (const p of r.portMap) console.log(`${p.from} → ${p.to} (container ${p.container})`);
+}
+
+function stopInstance(m, r) {
+  if (r.composeFile && fs.existsSync(r.composeFile)) {
+    try {
+      run(`docker compose -p ${JSON.stringify(r.project)} -f ${JSON.stringify(r.composeFile)} down`, { cwd: r.dir });
+    } catch (e) {
+      console.error(`  warn: compose down failed: ${e.message}`);
+    }
+  } else if (m.down) {
+    try {
+      run(m.down, {
+        cwd: r.repoDir,
+        env: { ...process.env, BENV_DIR: r.dir, BENV_REPO: r.repoDir, BENV_NAME: r.name, BENV_PORT_OFFSET: String(r.offset), BENV_PROJECT: r.project },
+      });
+    } catch (e) {
+      console.error(`  warn: down command failed: ${e.message}`);
+    }
+  }
+}
+
+function cmdDown(args) {
+  const m = loadManifest();
+  const state = loadState(m);
+  const r = state.instances[slug(args._[0] || '')];
+  if (!r) die('unknown instance.');
+  stopInstance(m, r);
+  console.log(`✔ "${r.name}" stopped (dir kept). Use \`benv up\` semantics or \`benv rm\` to delete.`);
+}
+
+function cmdRm(args) {
+  const m = loadManifest();
+  const state = loadState(m);
+  const key = slug(args._[0] || '');
+  const r = state.instances[key];
+  if (!r) die('unknown instance.');
+  stopInstance(m, r);
+  if (fs.existsSync(r.dir)) {
+    console.log(`Removing ${r.dir}`);
+    fs.rmSync(r.dir, { recursive: true, force: true });
+  }
+  delete state.instances[key];
+  saveState(m, state);
+  console.log(`✔ "${key}" removed.`);
+}
+
+const KNOWN_EDITORS = ['zed', 'code', 'cursor', 'subl', 'webstorm', 'idea', 'nvim', 'vim'];
+
+function resolveInstance(m, state, rawName) {
+  const key = slug(rawName || '');
+  if (key) {
+    const r = state.instances[key];
+    if (!r) die(`unknown instance "${key}" (benv ls).`);
+    return r;
+  }
+  const all = Object.values(state.instances);
+  if (all.length === 1) return all[0];
+  if (all.length === 0) die('no instances (benv up <branch>).');
+  die('multiple instances — specify a name (benv ls).');
+}
+
+function cmdOpen(args) {
+  const m = loadManifest();
+  const state = loadState(m);
+  const r = resolveInstance(m, state, args._[0]);
+  const dir = args.root ? r.dir : (r.repoDir || r.dir);
+
+  // Editor precedence: shorthand flag > --editor <cmd> > manifest.editor > $VISUAL/$EDITOR.
+  let cmd = KNOWN_EDITORS.find((e) => args[e]) || null;
+  if (!cmd && typeof args.editor === 'string') cmd = args.editor;
+  if (!cmd) cmd = m.raw.editor || process.env.VISUAL || process.env.EDITOR || null;
+  if (!cmd) {
+    die('no editor given. Use --zed/--code/--cursor, --editor <cmd>, set "editor" in .benv.json, or $EDITOR.');
+  }
+
+  const bin = cmd.split(/\s+/)[0];
+  try {
+    sh(`command -v ${bin}`);
+  } catch {
+    die(`editor command not found on PATH: ${bin}`);
+  }
+
+  console.log(`Opening ${dir} in ${cmd}`);
+  const parts = cmd.split(/\s+/);
+  const child = cp.spawn(parts[0], [...parts.slice(1), dir], { detached: true, stdio: 'ignore' });
+  child.unref();
+}
+
+function cmdPrune() {
+  const m = loadManifest();
+  const state = loadState(m);
+  let n = 0;
+  for (const [key, r] of Object.entries(state.instances)) {
+    if (!fs.existsSync(r.dir)) {
+      delete state.instances[key];
+      n++;
+    }
+  }
+  saveState(m, state);
+  console.log(`✔ pruned ${n} dangling instance(s).`);
+}
+
+function usage() {
+  console.log(`benv — parallel branch environments
+
+usage:
+  benv init                     scaffold .benv.json in the current dir
+  benv up <branch> [--name N]   clone workspace, checkout branch, run app on a free port offset
+                                (default: SHARES the main stack's DB — same data, untouched)
+  benv up <branch> --isolated-db   full stack with its own fresh DB volumes instead
+  benv ls                       list instances
+  benv open [name] [--zed|--code|--cursor|--editor <cmd>] [--root]
+                                open an instance in an editor (repo dir; --root = whole workspace)
+  benv ports <name>             show port mappings for an instance
+  benv down <name>              stop an instance's stack (keeps the dir)
+  benv rm <name>                stop + delete an instance
+  benv prune                    drop state entries whose dir is gone
+`);
+}
+
+// ---------------------------------------------------------------------------
+// Arg parsing + dispatch
+// ---------------------------------------------------------------------------
+
+const BOOLEAN_FLAGS = new Set([
+  'zed', 'code', 'cursor', 'subl', 'webstorm', 'idea', 'nvim', 'vim',
+  'root', 'isolated-db', 'isolated', 'fresh-db',
+]);
+
+function parseArgs(argv) {
+  const out = { _: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith('--')) {
+      let key = a.slice(2);
+      const eq = key.indexOf('=');
+      if (eq !== -1) {
+        out[key.slice(0, eq)] = key.slice(eq + 1);
+        continue;
+      }
+      const next = argv[i + 1];
+      if (!BOOLEAN_FLAGS.has(key) && next && !next.startsWith('--')) {
+        out[key] = next;
+        i++;
+      } else {
+        out[key] = true;
+      }
+    } else {
+      out._.push(a);
+    }
+  }
+  return out;
+}
+
+function main() {
+  const [, , command, ...rest] = process.argv;
+  const args = parseArgs(rest);
+  switch (command) {
+    case 'init': return cmdInit();
+    case 'up': return cmdUp(args);
+    case 'ls': case 'list': return cmdLs();
+    case 'ports': return cmdPorts(args);
+    case 'open': return cmdOpen(args);
+    case 'down': case 'stop': return cmdDown(args);
+    case 'rm': case 'destroy': return cmdRm(args);
+    case 'prune': return cmdPrune();
+    case undefined: case '-h': case '--help': case 'help': return usage();
+    default:
+      die(`unknown command "${command}" (see \`benv help\`).`);
+  }
+}
+
+if (require.main === module) {
+  main();
+} else {
+  module.exports = { rewriteCompose, sharedCompose, slug, nextSlot };
+}

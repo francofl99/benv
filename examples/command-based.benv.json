@@ -1,0 +1,9 @@
+{
+  "name": "myservice",
+  "workspaceRoot": ".",
+  "repoSubdir": ".",
+  "instancesRoot": "~/.benv/myservice/instances",
+  "portOffsetStep": 10,
+  "up": "PORT=$((3000 + BENV_PORT_OFFSET)) docker run -d --name $BENV_PROJECT -p $PORT:3000 -v $BENV_REPO:/app myimage",
+  "down": "docker rm -f $BENV_PROJECT"
+}
