@@ -104,7 +104,7 @@ benv rm my-branch
 | `benv init` | Scaffold `.benv.json` in the current dir |
 | `benv up <branch> [--name N]` | Clone workspace, checkout branch, start on a free port offset. **Default: shares the main stack's DB** |
 | `benv up <branch> --isolated-db` | Full stack with its own fresh DB volumes instead |
-| `benv ls` | List instances |
+| `benv ls` | List instances (shows each one's primary port) |
 | `benv open [name] [--<editor> \| --editor <cmd>] [--root]` | With no editor flag, open an interactive shell in the instance dir (subshell — `exit` to return). `--<editor>` instead runs `<editor> <dir>` (e.g. `--code`, `--zed`, `--claude`). `--root` targets the whole workspace instead of the repo dir |
 | `benv ports <name>` | Show port mappings |
 | `benv down <name>` | Stop an instance's stack (keeps the dir) |

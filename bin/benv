@@ -542,10 +542,14 @@ function cmdLs() {
     console.log('no instances.');
     return;
   }
-  console.log(['NAME', 'BRANCH', 'OFFSET', 'PROJECT', 'DIR'].join('\t'));
+  console.log(['NAME', 'BRANCH', 'PORTS', 'OFFSET', 'PROJECT', 'DIR'].join('\t'));
   for (const r of rows) {
     const exists = fs.existsSync(r.dir) ? '' : ' (dir missing)';
-    console.log([r.name, r.branch, `+${r.offset}`, r.project, r.dir + exists].join('\t'));
+    const pm = r.portMap || [];
+    const ports = pm.length
+      ? `${pm[0].to}${pm.length > 1 ? ` (+${pm.length - 1})` : ''}`
+      : '-';
+    console.log([r.name, r.branch, ports, `+${r.offset}`, r.project, r.dir + exists].join('\t'));
   }
 }
 

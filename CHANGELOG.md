@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- `benv ls` now shows a `PORTS` column with each instance's primary (app) host port, plus a
+  `(+N)` count of the other mapped ports.
+
 ## [0.2.0] — 2026-07-13
 
 ### Added
