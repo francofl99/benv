@@ -672,6 +672,22 @@ function cmdPrune() {
   console.log(`✔ pruned ${n} dangling instance(s).`);
 }
 
+function cmdUpdate() {
+  // The CLI lives at <repo>/bin/benv (Node resolves the symlink to its real path).
+  const repoDir = path.join(__dirname, '..');
+  if (fs.existsSync(path.join(repoDir, '.git'))) {
+    console.log(`Updating benv (git pull) in ${repoDir}`);
+    runFile('git', ['-C', repoDir, 'pull', '--ff-only']);
+    // Re-link in case new commands/skills were added; install.sh is idempotent.
+    const installer = path.join(repoDir, 'install.sh');
+    if (fs.existsSync(installer)) runFile('bash', [installer]);
+    console.log(`✔ benv is now ${version()}`);
+  } else {
+    console.log('benv was installed via npm. Update with:');
+    console.log('  npm i -g @francofl99/benv@latest');
+  }
+}
+
 function usage() {
   console.log(`benv — parallel branch environments
 
@@ -689,6 +705,7 @@ usage:
   benv down <name>              stop an instance's stack (keeps the dir)
   benv rm <name>                stop + delete an instance
   benv prune                    drop state entries whose dir is gone
+  benv update                   update benv itself (git pull, or npm hint)
 `);
 }
 
@@ -747,6 +764,7 @@ function main() {
     case 'down': case 'stop': return cmdDown(args);
     case 'rm': case 'destroy': return cmdRm(args);
     case 'prune': return cmdPrune();
+    case 'update': case 'upgrade': return cmdUpdate();
     case '-v': case '--version': case 'version': return console.log(`benv ${version()}`);
     case undefined: case '-h': case '--help': case 'help': return usage();
     default:

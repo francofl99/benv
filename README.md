@@ -78,6 +78,14 @@ always point at the repo.
 
 Check it: `benv --version`.
 
+### Update
+
+```bash
+benv update       # git pull for clone installs; npm hint otherwise
+```
+
+Or manually: `npm i -g @francofl99/benv@latest` (npm), or `git pull` in the clone.
+
 ### Uninstall
 
 ```bash
@@ -110,6 +118,7 @@ benv rm my-branch
 | `benv down <name>` | Stop an instance's stack (keeps the dir) |
 | `benv rm <name>` | Stop + delete an instance |
 | `benv prune` | Drop state entries whose dir is gone |
+| `benv update` | Update benv itself (`git pull` for clone installs; prints the npm command otherwise) |
 
 ## DB mode: shared (default) vs isolated
 

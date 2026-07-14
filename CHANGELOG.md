@@ -8,6 +8,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - `benv ls` now shows a `PORTS` column with each instance's primary (app) host port, plus a
   `(+N)` count of the other mapped ports.
+- `benv update` self-updates the tool: `git pull` (+ re-link) for clone installs, or prints
+  the `npm i -g` command for npm installs.
 
 ## [0.2.0] — 2026-07-13
 
