@@ -626,6 +626,20 @@ function resolveInstance(m, state, rawName) {
   die('multiple instances — specify a name (benv ls).');
 }
 
+// Environment exported into processes run inside an instance (open shell / editor), so
+// tooling can adapt to the instance's port offset — e.g. a dev-server can bind a per-instance
+// port with `basePort + BENV_PORT_OFFSET` instead of a fixed one that collides across instances.
+function instanceEnv(r) {
+  return {
+    ...process.env,
+    BENV_NAME: r.name,
+    BENV_PROJECT: r.project,
+    BENV_PORT_OFFSET: String(r.offset),
+    BENV_DIR: r.dir,
+    BENV_REPO: r.repoDir || r.dir,
+  };
+}
+
 function cmdOpen(args) {
   const m = loadManifest();
   const state = loadState(m);
@@ -646,7 +660,7 @@ function cmdOpen(args) {
     // type `exit` to return.)
     const shell = process.env.SHELL || '/bin/sh';
     console.log(`cd ${dir}  (subshell — type 'exit' to return)`);
-    cp.spawnSync(shell, { stdio: 'inherit', cwd: dir });
+    cp.spawnSync(shell, { stdio: 'inherit', cwd: dir, env: instanceEnv(r) });
     return;
   }
 
@@ -655,7 +669,7 @@ function cmdOpen(args) {
 
   // Run `<program> <dir>` in the foreground, inheriting the current terminal.
   console.log(`Opening ${dir} in ${cmd}`);
-  cp.spawnSync(bin, [...parts.slice(1), dir], { stdio: 'inherit' });
+  cp.spawnSync(bin, [...parts.slice(1), dir], { stdio: 'inherit', env: instanceEnv(r) });
 }
 
 function cmdPrune() {

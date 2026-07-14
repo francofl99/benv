@@ -10,6 +10,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   `(+N)` count of the other mapped ports.
 - `benv update` self-updates the tool: `git pull` (+ re-link) for clone installs, or prints
   the `npm i -g` command for npm installs.
+- `benv open` now exports `BENV_PORT_OFFSET`/`BENV_NAME`/`BENV_PROJECT`/`BENV_DIR`/`BENV_REPO`
+  into the shell/editor it launches, so per-instance tooling (e.g. a dev-server) can pick a
+  port like `basePort + BENV_PORT_OFFSET` and avoid collisions across parallel instances.
 
 ## [0.2.0] — 2026-07-13
 
