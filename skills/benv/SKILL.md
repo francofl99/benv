@@ -45,6 +45,49 @@ benv rm <name>                 # baja + borra el dir
 benv prune                     # limpia entradas cuyo dir ya no existe
 ```
 
+## ⚠️ Trabajar DENTRO de la instancia (CRÍTICO — leer siempre)
+
+`benv up` **NO cambia tu directorio de trabajo**. Clona a un dir aparte y arranca el stack,
+pero tu shell/agente sigue en el checkout principal (MAIN). De hecho el output termina con
+`Shell cwd was reset to <MAIN>`. Si después seguís editando sin redirigir, **todo el trabajo
+cae en MAIN en el puerto default**, no en la instancia — exactamente lo que benv debe evitar.
+
+**Regla obligatoria para agentes/CLI (Claude Code incluido):**
+
+1. Después de `benv up <branch>`, resolvé el dir del repo de la instancia:
+   ```bash
+   benv ls    # tomar la columna DIR de la instancia
+   # repo de trabajo = <DIR>/<repoSubdir>   (p. ej. <DIR>/picallex)
+   ```
+2. **Fijá esa ruta como base y usála en CADA tool call de ahí en adelante**: Read/Edit/Write
+   con rutas absolutas dentro de `<DIR>/<repoSubdir>`, y Bash con `git -C <repo>` o `cd <repo>`
+   al inicio del comando. No alcanza con "haber inicializado benv" una vez.
+3. **Verificá antes de tocar nada**:
+   ```bash
+   REPO=<DIR>/<repoSubdir>
+   git -C "$REPO" branch --show-current    # ¿es la branch esperada?
+   git -C "$REPO" status --short           # ¿empezás desde limpio?
+   ```
+4. Tests/lint/validaciones/`docker exec` también van contra la instancia (su puerto/containers
+   tienen el prefijo `<projectPrefix>-<name>`), no contra MAIN.
+
+**Error común (bug):** correr `benv up` y seguir con Edit/Write sobre `MAIN` porque es el cwd
+por defecto. Síntoma: `git -C MAIN status` muestra tus cambios y la instancia queda intacta.
+Si lo detectás, mové el trabajo a la instancia (patch/`git stash` → aplicar en el repo de la
+instancia) y limpiá MAIN.
+
+### La branch debe tener la base correcta ANTES de `benv up`
+
+`benv up` hace **checkout de una branch existente** (no la crea desde una base elegida). Si la
+feature depende de trabajo aún no mergeado (otra branch), creá la branch nueva **desde esa base**
+antes:
+```bash
+git branch <nueva> <base-correcta>   # NO siempre master: usá la branch de la que depende
+benv up <nueva>
+```
+Crear desde `master` cuando la feature extiende código de otra branch sin mergear deja la
+instancia sin las piezas necesarias (anchors/símbolos que no existen en master).
+
 ## Modo BD: compartido (default) vs aislado
 
 - **Compartido (default)**: la instancia arranca **solo los `appServices`** (con `--no-deps`)

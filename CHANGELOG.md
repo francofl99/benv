@@ -14,6 +14,12 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   into the shell/editor it launches, so per-instance tooling (e.g. a dev-server) can pick a
   port like `basePort + BENV_PORT_OFFSET` and avoid collisions across parallel instances.
 
+### Documentation
+- Skill (`skills/benv/SKILL.md`): added a "work INSIDE the instance" section warning that
+  `benv up` does not change the caller's working directory, so agents/CLIs must redirect every
+  file/command to `<DIR>/<repoSubdir>`; plus a note to create the branch from the correct base
+  before `benv up` (it checks out an existing branch, it doesn't cut it from a chosen base).
+
 ## [0.2.0] — 2026-07-13
 
 ### Added
