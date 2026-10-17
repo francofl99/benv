@@ -14,7 +14,7 @@ Cargá la skill `benv` y seguí ese playbook. Requiere un `.benv.json` en la ra�
 | Abrir una shell en el dir de la instancia | `benv open <name>` (subshell) |
 | Abrir la instancia en un editor | `benv open <name> --code` (o `--zed`/`--cursor`/`--claude`/`--editor <cmd>`) |
 | Ver puertos | `benv ports <name>` |
-| Bajar y borrar | `benv rm <name>` |
+| Bajar y borrar (una o varias, en paralelo) | `benv rm <name> [name...]` |
 
 ## Reglas
 

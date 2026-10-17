@@ -50,6 +50,29 @@ function shell(cmd, opts = {}) {
   cp.execSync(cmd, { stdio: 'inherit', ...opts });
 }
 
+// Async runner for work done concurrently (bulk `rm`). With a `tag`, output is piped and every
+// line prefixed so interleaved instances stay readable; without one, it inherits the terminal.
+// `opts.shell` runs `file` as a manifest-authored shell string, with the same trust as shell().
+function spawnTagged(file, argv, { tag = '', ...opts } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = cp.spawn(file, argv, { ...opts, stdio: tag ? ['ignore', 'pipe', 'pipe'] : 'inherit' });
+    if (tag) {
+      for (const [src, dst] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
+        let buf = '';
+        src.setEncoding('utf8');
+        src.on('data', (chunk) => {
+          const lines = (buf + chunk).split(/\r?\n|\r/);
+          buf = lines.pop();
+          for (const l of lines) if (l.trim()) dst.write(`${tag}${l}\n`);
+        });
+        src.on('end', () => { if (buf.trim()) dst.write(`${tag}${buf}\n`); });
+      }
+    }
+    child.on('error', reject);
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`\`${file}\` exited with code ${code}`))));
+  });
+}
+
 function slug(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -565,49 +588,71 @@ function cmdPorts(args) {
   for (const p of r.portMap) console.log(`${p.from} → ${p.to} (container ${p.container})`);
 }
 
-function stopInstance(m, r) {
+async function stopInstance(m, r, tag = '') {
   if (r.composeFile && fs.existsSync(r.composeFile)) {
     try {
       // No `-v`: never removes volumes. External networks (shared mode) are left intact.
-      runFile('docker', ['compose', '-p', r.project, '-f', r.composeFile, 'down'], { cwd: r.dir });
+      await spawnTagged('docker', ['compose', '-p', r.project, '-f', r.composeFile, 'down'], { cwd: r.dir, tag });
     } catch (e) {
-      console.error(`  warn: compose down failed: ${e.message}`);
+      console.error(`${tag}  warn: compose down failed: ${e.message}`);
     }
   } else if (m.down) {
     try {
-      shell(m.down, {
+      await spawnTagged(m.down, [], {
+        shell: true,
+        tag,
         cwd: r.repoDir,
         env: { ...process.env, BENV_DIR: r.dir, BENV_REPO: r.repoDir, BENV_NAME: r.name, BENV_PORT_OFFSET: String(r.offset), BENV_PROJECT: r.project },
       });
     } catch (e) {
-      console.error(`  warn: down command failed: ${e.message}`);
+      console.error(`${tag}  warn: down command failed: ${e.message}`);
     }
   }
 }
 
-function cmdDown(args) {
+async function cmdDown(args) {
   const m = loadManifest();
   const state = loadState(m);
   const r = state.instances[slug(args._[0] || '')];
   if (!r) die('unknown instance.');
-  stopInstance(m, r);
+  await stopInstance(m, r);
   console.log(`✔ "${r.name}" stopped (dir kept). Use \`benv up\` semantics or \`benv rm\` to delete.`);
 }
 
-function cmdRm(args) {
+async function cmdRm(args) {
   const m = loadManifest();
   const state = loadState(m);
-  const key = slug(args._[0] || '');
-  const r = state.instances[key];
-  if (!r) die('unknown instance.');
-  stopInstance(m, r);
-  if (fs.existsSync(r.dir)) {
-    console.log(`Removing ${r.dir}`);
-    fs.rmSync(r.dir, { recursive: true, force: true });
-  }
-  delete state.instances[key];
-  saveState(m, state);
-  console.log(`✔ "${key}" removed.`);
+  const keys = [...new Set(args._.map(slug).filter(Boolean))];
+  if (!keys.length) die('usage: benv rm <name> [name...]');
+  const unknown = keys.filter((k) => !state.instances[k]);
+  if (unknown.length) die(`unknown instance(s): ${unknown.join(', ')} (benv ls).`);
+
+  const tagged = keys.length > 1;
+  const removed = [];
+  const failed = [];
+  await Promise.all(keys.map(async (key) => {
+    const r = state.instances[key];
+    const tag = tagged ? `[${key}] ` : '';
+    try {
+      await stopInstance(m, r, tag);
+      if (fs.existsSync(r.dir)) {
+        console.log(`${tag}Removing ${r.dir}`);
+        // Native `rm -rf` is much faster than fs.rm on large clones (node_modules, vendor).
+        await spawnTagged('rm', ['-rf', '--', r.dir], { tag });
+      }
+      removed.push(key);
+      console.log(`✔ "${key}" removed.`);
+    } catch (e) {
+      failed.push(key);
+      console.error(`✘ "${key}": ${e.message}`);
+    }
+  }));
+
+  // Re-read so instances created by another benv while we were removing aren't clobbered.
+  const fresh = loadState(m);
+  for (const key of removed) delete fresh.instances[key];
+  saveState(m, fresh);
+  if (failed.length) die(`failed to remove: ${failed.join(', ')}`);
 }
 
 // Flags that are NOT the editor name when resolving `benv open`.
@@ -717,7 +762,7 @@ usage:
                                 --root targets the whole workspace instead of the repo dir
   benv ports <name>             show port mappings for an instance
   benv down <name>              stop an instance's stack (keeps the dir)
-  benv rm <name>                stop + delete an instance
+  benv rm <name> [name...]      stop + delete one or more instances (in parallel)
   benv prune                    drop state entries whose dir is gone
   benv update                   update benv itself (git pull, or npm hint)
 `);
@@ -787,12 +832,8 @@ function main() {
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (e) {
-    // Surface a clean one-line error instead of a raw stack trace.
-    die(e && e.message ? e.message : String(e));
-  }
+  // Surface a clean one-line error instead of a raw stack trace.
+  Promise.resolve().then(main).catch((e) => die(e && e.message ? e.message : String(e)));
 } else {
   module.exports = { rewriteCompose, sharedCompose, slug, nextSlot };
 }

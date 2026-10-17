@@ -9,7 +9,7 @@
     "benv": "bin/benv"
   },
   "scripts": {
-    "test": "node test/rewrite.test.js"
+    "test": "node test/rewrite.test.js && node test/rm.test.js"
   },
   "engines": {
     "node": ">=16"

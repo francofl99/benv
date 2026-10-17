@@ -116,7 +116,7 @@ benv rm my-branch
 | `benv open [name] [--<editor> \| --editor <cmd>] [--root]` | With no editor flag, open an interactive shell in the instance dir (subshell — `exit` to return). `--<editor>` instead runs `<editor> <dir>` (e.g. `--code`, `--zed`, `--claude`). `--root` targets the whole workspace instead of the repo dir |
 | `benv ports <name>` | Show port mappings |
 | `benv down <name>` | Stop an instance's stack (keeps the dir) |
-| `benv rm <name>` | Stop + delete an instance |
+| `benv rm <name> [name...]` | Stop + delete one or more instances (removed in parallel) |
 | `benv prune` | Drop state entries whose dir is gone |
 | `benv update` | Update benv itself (`git pull` for clone installs; prints the npm command otherwise) |
 
