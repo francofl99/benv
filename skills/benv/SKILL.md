@@ -41,7 +41,7 @@ benv open [name] --code        # o abre en un editor: --code/--zed/--cursor/--cl
                                #   sin flag usa "editor" del manifiesto o $EDITOR; --root abre todo el workspace
 benv ports <name>              # muestra el mapeo de puertos de una instancia
 benv down <name>               # baja el stack (conserva el dir)
-benv rm <name>                 # baja + borra el dir
+benv rm <name> [name...]       # baja + borra el dir (varias a la vez, en paralelo)
 benv prune                     # limpia entradas cuyo dir ya no existe
 ```
 

@@ -13,6 +13,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - `benv open` now exports `BENV_PORT_OFFSET`/`BENV_NAME`/`BENV_PROJECT`/`BENV_DIR`/`BENV_REPO`
   into the shell/editor it launches, so per-instance tooling (e.g. a dev-server) can pick a
   port like `basePort + BENV_PORT_OFFSET` and avoid collisions across parallel instances.
+- `benv rm` accepts several instance names and removes them in parallel (stack down + dir
+  delete), prefixing each line of output with `[name]`. Unknown names abort before anything
+  is removed.
 
 ### Documentation
 - Skill (`skills/benv/SKILL.md`): added a "work INSIDE the instance" section warning that
